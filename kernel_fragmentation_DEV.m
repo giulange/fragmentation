@@ -1,8 +1,9 @@
 %% kernel fragmentation
 %% pars
+rural               = true;
 threshold           = 0.7;
 mat_builtin         = false; % { true:colfilt.m , false:4-kernels-by-giuliano }
-cuda_elapsed_time   = [910,260, 10870];% copy/paste from Nsight ==> [ 4-kernels, 3-kernels, giorgio.urso ]
+cuda_elapsed_time   = [910,250, 10870];% copy/paste from Nsight ==> [ 4-kernels, 3-kernels, giorgio.urso ]
 RADIUS              = 5;
 PATH                = '/home/giuliano/git/cuda/fragmentation';
 % PATH              = '/Users/giuliano/Documents/MATLAB';
@@ -66,11 +67,13 @@ FIL_FRAG_giorgio    = fullfile(PATH,'data','FRAGgiorgio-cuda.tif');
 % ROI = true(info.Height,info.Width);
 % ROI(BIN==0)=false;
 % geotiffwrite(FIL_ROI,ROI,info.RefMatrix, 'GeoKeyDirectoryTag', info.GeoTIFFTags.GeoKeyDirectoryTag)
-%% load BIN & ROI
+%% load BIN & ROI & copmute COMP
 BIN             = double(geotiffread(FIL_BIN));
 ROI             = double(geotiffread(FIL_ROI));
 % apply ROI by filtering BIN:
 BIN = BIN.*ROI;
+% complementary_to_ONE
+COMP            = ones(size(BIN))-BIN;
 %% set derived variables
 buffer          = RADIUS+1;
 mask_len        = RADIUS*2+1;
@@ -292,9 +295,19 @@ FRAG_ml = FRAG_ml .* ROI;
 myToc = round(toc*1000);
 fprintf('%25s\t%6d [msec]\n\n','"colfilt" built-in func.',myToc)
 end
+
+%% rural / urban
+if ~mat_builtin, FRAG_ml = k4_ml; end
+
+if rural
+    % computes rural fragmentation:
+    FRAG_ml = FRAG_ml .* COMP .* ROI;
+else
+    % computes urban fragmentation:
+    FRAG_ml = FRAG_ml .* BIN .* ROI;
+end
 %% DIFF :: MatLab - CUDA 4 kernel
 
-if ~exist('FRAG_ml','var'), FRAG_ml = k4_ml; end
 if ~mat_builtin
     algorithm = 'ml-4kernels';
 elseif mat_builtin 
@@ -381,27 +394,34 @@ DIFF            = FRAG_ml - FRAG_cudat;
 [r,c]=find(DIFF~=0);
 
 if ~isempty(r)
+    fprintf('%s\n',repmat('_',1,50));
     fprintf('%6s%6s%14s%10s%10s\n','row','col','on-the-fly', 'matlab','cuda-T')
+    fprintf('%s\n',repmat('_',1,50));
 end
-if length(r)>100, Nprints = 100; else Nprints=length(r); end
-for ii = 1:Nprints
+if length(r)>5, Nprints = 5; else Nprints=length(r); end
+for ii = 1:round(length(r)/5):length(r)
     rS = max(1,r(ii)-RADIUS);
     rE = min(HEIGHT,r(ii)+RADIUS);
     cS = max(1,c(ii)-RADIUS);
     cE = min(WIDTH,c(ii)+RADIUS);
-
-    fprintf('%6d%6d%14d%10d%10d\n',r(ii),c(ii),sum(sum(BIN(rS:rE,cS:cE))), ...
+    
+    % output on-the-fly
+    OUT_otf = sum(sum( BIN(rS:rE,cS:cE)  )) * ROI(r(ii),c(ii)) * COMP(r(ii),c(ii));
+    fprintf('%6d%6d%14d%10d%10d\n',r(ii),c(ii),OUT_otf, ...
             FRAG_ml(r(ii),c(ii)), FRAG_cudat(r(ii),c(ii)) )
+    fprintf('%6s\n','...');
 end
-if length(r)>100
-    fprintf('...\n');
+if length(r)>5
     rS = max(1,r(end)-RADIUS);
     rE = min(HEIGHT,r(end)+RADIUS);
     cS = max(1,c(end)-RADIUS);
     cE = min(WIDTH,c(end)+RADIUS);
 
-    fprintf('%6d%6d%14d%10d%10d\n',r(end),c(end),sum(sum(BIN(rS:rE,cS:cE))), ...
+    % output on-the-fly
+    OUT_otf = sum(sum( BIN(rS:rE,cS:cE)  )) * ROI(r(end),c(end)) * COMP(r(end),c(end));
+    fprintf('%6d%6d%14d%10d%10d\n',r(end),c(end),OUT_otf, ...
             FRAG_ml(r(end),c(end)), FRAG_cudat(r(end),c(end)) )
+    fprintf('%s\n',repmat('_',1,50));
 end
 
 %% step-by-step check
@@ -426,6 +446,3 @@ end
 % K6 = geotiffread( fullfile(PATH,'data','-6-Vcumsum.tif') );
 % 
 % K7 = geotiffread( fullfile(PATH,'data','FRAG-cuda.tif') );
-
-
-

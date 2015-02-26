@@ -14,6 +14,16 @@
 // GIS
 #include "/home/giuliano/git/cuda/weatherprog-cudac/includes/gis.h"
 
+
+/**
+ * 	PARS
+ */
+#define 		TILE_DIM 					32
+unsigned int 	RADIUS						= 5;
+bool			rural						= true;
+bool 			print_intermediate_arrays 	= false;
+const char 		*BASE_PATH 					= "/home/giuliano/git/cuda/fragmentation";
+
 // Giorgio Urso
 #include "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/soil_sealing/includes/histo.cu"
 // 	2D float texture
@@ -25,7 +35,6 @@ void freeTexture(){
 }
 // Giorgio Urso
 
-#define TILE_DIM 32
 // defined for gtranspose:
 /*#define tix threadIdx.x
 #define tiy threadIdx.y
@@ -37,11 +46,8 @@ void freeTexture(){
 #define gdy gridDim.y
 */
 /*
- * 		DEFINE pars
+ *	kernel labels
  */
-bool 			print_intermediate_arrays = false;
-const char 		*BASE_PATH 		= "/home/giuliano/git/cuda/fragmentation";
-unsigned int 	RADIUS			= 5;
 const char 		*kern_1 		= "cumsum_horizontal"	;
 const char 		*kern_2 		= "sum_of_3_cols"		;
 const char 		*kern_3 		= "cumsum_vertical"		;
@@ -50,6 +56,7 @@ const char 		*kern_13 		= "Vcumsum"				;
 const char 		*kern_24 		= "sum_of_3_LINES"		;
 const char 		*kern_trans		= "gtransform"			;
 const char 		*kern_mask		= "mask_twice"			;
+const char 		*kern_compl		= "complementary_to_ONE";
 
 char			buffer[255];
 
@@ -173,31 +180,6 @@ void transposeSC(T * out, const T * in, unsigned dim0, unsigned dim1)
     }
 }
 
-template<typename T> // , bool is32Multiple
-__global__
-void gtranspose(T *O, const T *I, unsigned WIDTH, unsigned HEIGHT)
-{
-	unsigned int tix = threadIdx.x;
-	unsigned int tiy = threadIdx.y;
-	unsigned int bix = blockIdx.x;
-	unsigned int biy = blockIdx.y;
-	unsigned int bdx = blockDim.x;
-	unsigned int bdy = blockDim.y;
-	//unsigned int gdx = gridDim.x;
-	//unsigned int gdy = gridDim.y;
-
-	//					  |--grid------|   |-block--|   |-thread--|
-	unsigned int itid	= WIDTH*bdy*biy  + WIDTH*tiy  + bix*bdx+tix;
-	unsigned int otid	= HEIGHT*bdx*bix + HEIGHT*tix + biy*bdy+tiy;
-	unsigned int xtid	= bix*bdx+tix;
-	unsigned int ytid	= biy*bdy+tiy;
-
-	//if( is32Multiple || (xtid<WIDTH && ytid<HEIGHT) ){
-	if( xtid<WIDTH && ytid<HEIGHT ){
-		O[ otid ] = I[ itid ];
-		//__syncthreads();
-	}
-}
 
 template <typename T>
 void write_mat_T( T *MAT, unsigned int nr, unsigned int nc, const char *filename )
@@ -589,6 +571,59 @@ __global__ void sum_of_3_rows( 		const double 			*vCSUM		,
 	}
 }
 
+template<typename T> // , bool is32Multiple
+__global__
+void gtranspose(T *O, const T *I, unsigned WIDTH, unsigned HEIGHT)
+{
+	unsigned int tix = threadIdx.x;
+	unsigned int tiy = threadIdx.y;
+	unsigned int bix = blockIdx.x;
+	unsigned int biy = blockIdx.y;
+	unsigned int bdx = blockDim.x;
+	unsigned int bdy = blockDim.y;
+
+	//					  |--grid------|   |-block--|   |-thread--|
+	unsigned int itid	= WIDTH*bdy*biy  + WIDTH*tiy  + bix*bdx+tix;
+	unsigned int otid	= HEIGHT*bdx*bix + HEIGHT*tix + biy*bdy+tiy;
+	unsigned int xtid	= bix*bdx+tix;
+	unsigned int ytid	= biy*bdy+tiy;
+
+	//if( is32Multiple || (xtid<WIDTH && ytid<HEIGHT) ){
+	if( xtid<WIDTH && ytid<HEIGHT ){
+		O[ otid ] = I[ itid ];
+		//__syncthreads();
+	}
+}
+
+template<typename T> // , bool is32Multiple
+__global__
+void complementary_to_ONE(const T *ONE, const T *BIN, T *COMP, unsigned WIDTH, unsigned HEIGHT) {
+
+	/**
+	 * 	NOTES
+	 * 	In rural fragmentation:		I need COMP to mask out urban pixels
+	 * 								from being fragmented (because only rural
+	 * 								pixels can be fragmented).
+	 * 	In urban fragmentation:		I need COMP to run the whole fragmentation program
+	 * 								(instead of BIN as in rural frag.), and I use BIN
+	 * 								to mask out rural pixels.
+	 */
+	unsigned int r		= threadIdx.x;
+	unsigned int c		= threadIdx.y;
+	unsigned int bix	= blockIdx.x;
+	unsigned int biy	= blockIdx.y;
+	unsigned int bdx	= blockDim.x;
+	unsigned int bdy	= blockDim.y;
+
+	unsigned int tix	= bix * bdx + r;
+	unsigned int tiy	= biy * bdy + c;
+	unsigned int tid 	= tix + tiy*WIDTH;
+
+	if( tix<WIDTH && tiy<HEIGHT ){
+		COMP[ tid ] = ONE[tid] - BIN[ tid ];
+	}
+}
+
 template<typename C>//, typename U>
 __global__ void Vcumsum( 	const C				*IN			,
 //							const U				*MASK		,
@@ -696,18 +731,35 @@ __global__ void sum_of_3_LINES(		const double 	*IN			,
 	}
 }
 __global__ void mask_twice(		double 				*FRAG		,	// in/out
+								const unsigned char	*ROI		,
+								const unsigned char	*COMP		,
 								unsigned int 		map_width	,
 								unsigned int 		map_height	,
-								const unsigned char	*ROI		,
-//								const double		*COMP		,
-								unsigned int		mask_area	){
+								double				mask_area	){
+	/**
+	 * 	NOTES
+	 *	I multiply by:
+	 *		> ROI:		to exclude pixels outside the region of interest.
+	 *		> COMP:		to exclude urban (rural) pixels in rural (urban) fragmentation.
+	 *	If it is rural fragmentation COMP is the complentary to 1 of BIN,
+	 *	else if  urban fragmentation COMP is BIN.
+	 */
+
+	__shared__ double FRAG_sh[TILE_DIM][TILE_DIM];
 
 	unsigned int tix 		= blockDim.x*blockIdx.x + threadIdx.x;
 	unsigned int tiy 		= blockDim.y*blockIdx.y + threadIdx.y;
 	unsigned int tid 		= tix + tiy*map_width;
 
 	if( tix < map_width && tiy < map_height){
-		FRAG[tid] = FRAG[tid] * ROI[tid] / mask_area; // it still misses oneOf{ BIN, COMP }
+		FRAG_sh[threadIdx.y][threadIdx.x] = 0.0; __syncthreads();
+		//FRAG[tid] = (double)((unsigned int)FRAG[tid] * ROI[tid] * COMP[tid]) / mask_area;
+		if(ROI[tid]==1 && COMP[tid]==1){
+			FRAG_sh[threadIdx.y][threadIdx.x] = FRAG[tid];// / mask_area;
+		}
+		__syncthreads();
+		FRAG[tid] = FRAG_sh[threadIdx.y][threadIdx.x];
+		__syncthreads();
 	}
 }
 
@@ -733,7 +785,8 @@ int main( int argc, char **argv ){
 	unsigned int		map_len;
 	double 				*dev_IO, *dev_FRAG;
 	double 				*host_IO, *host_FRAG, *host_TMP;
-	unsigned char		*dev_BIN, *dev_ROI, *dev_TMP, *dev_TMP2;
+	unsigned char		*host_COMP;
+	unsigned char		*dev_BIN, *dev_ROI, *dev_TMP, *dev_TMP2, *dev_COMP, *dev_ONE;
 	clock_t				start_t,end_t;
 	unsigned int 		elapsed_time	= 0;
 	cudaDeviceProp		devProp;
@@ -774,10 +827,13 @@ int main( int argc, char **argv ){
 	// initialize grids on CPU MEM:
 	CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_TMP, 		sizeDouble) );
 	CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_IO, 		sizeDouble) );
+	CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_COMP, 	sizeChar) );
 	CUDA_CHECK_RETURN( cudaMallocHost( 	(void**)&host_FRAG, 	sizeDouble) );
 	// initialize grids on GPU MEM:
 	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_TMP2,		sizeChar) );
 	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_TMP, 		sizeChar) );
+	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_ONE,		sizeChar) );
+	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_COMP,		sizeChar) );
 	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_BIN, 		sizeChar) );
 	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_ROI,  	sizeChar) );
 	CUDA_CHECK_RETURN( cudaMalloc(		(void **)&dev_IO,  		sizeDouble) );
@@ -820,6 +876,10 @@ int main( int argc, char **argv ){
 	gdy_mask 	= ((unsigned int)(MDbin.heigth % sqrt_nmax_threads)>0) + MDbin.heigth / sqrt_nmax_threads;
 	dim3 block_mask( sqrt_nmax_threads, sqrt_nmax_threads, 1);
 	dim3 grid_mask ( gdx_mask, gdy_mask );
+	// complementary_to_ONE
+	dim3 block_compl( sqrt_nmax_threads, sqrt_nmax_threads, 1);
+	dim3 grid_compl ( gdx_mask, gdy_mask );
+
 
 	/*		KERNELS INVOCATION
 	 *
@@ -899,11 +959,14 @@ int main( int argc, char **argv ){
 	 * 		Try to apply ROI at the end, so that I skip one gtranspose at the beginning.
 	 *
 	 */
-	CUDA_CHECK_RETURN( cudaMemset(dev_FRAG, 0,  				sizeDouble) );
-	CUDA_CHECK_RETURN( cudaMemset(dev_IO, 0,  					sizeDouble) );
+	CUDA_CHECK_RETURN( cudaMemset(	dev_FRAG,	0,  sizeDouble	) );
+	CUDA_CHECK_RETURN( cudaMemset(	dev_IO,		0,  sizeDouble	) );
+	CUDA_CHECK_RETURN( cudaMemset(	dev_COMP,	0,  sizeChar	) );
+	CUDA_CHECK_RETURN( cudaMemset(	dev_ONE,	1,	sizeChar	) );
 	count_print=0;
 	elapsed_time=0;
 	printf("\n\n");
+
 /*	start_t = clock();
 	gtranspose<unsigned char><<<grid_trans,block_trans>>>(dev_TMP, dev_ROI, MDbin.width, MDbin.heigth);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
@@ -911,12 +974,45 @@ int main( int argc, char **argv ){
 	printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_trans,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 */
+
 	start_t = clock();
-	gtranspose<unsigned char><<<grid_trans,block_trans>>>(dev_TMP2,dev_BIN, MDbin.width, MDbin.heigth);
+	complementary_to_ONE<unsigned char><<<grid_compl,block_compl>>>( dev_ONE,dev_BIN, dev_COMP, MDbin.width, MDbin.heigth );
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
-	printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_trans,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_compl,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
+/*	CUDA_CHECK_RETURN( cudaMemcpy(host_COMP,dev_COMP,	(size_t)sizeChar,cudaMemcpyDeviceToHost) );
+	sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_compl);
+	geotiffwrite( FIL_BIN, buffer, MDbin, host_COMP );
+*/
+	if(rural==true){
+		/**
+		 * 	This is the schema for rural fragmentation (see NOTES in complementary_to_ONE & mask_twice kernels):
+		 * 		FRAG = fragmentation_prog( BIN, ROI ); // --> using 7 kernels from "gtranspose" to "sum_of_3_LINES"
+		 * 		FRAG = FRAG * ROI * COMP; // using the kernel "mask_twice"
+		 * 	* 	This means that the use of BIN & COMP is straightforward:
+		 */
+		start_t = clock();
+		gtranspose<unsigned char><<<grid_trans,block_trans>>>( dev_TMP2, dev_BIN, MDbin.width, MDbin.heigth );
+		CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+		end_t = clock();
+		printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_trans,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+		elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
+	}
+	else if(rural==false){
+		/**
+		 * 	This is the schema for urban fragmentation (see NOTES in complementary_to_ONE & mask_twice kernels):
+		 * 		FRAG = fragmentation_prog( COMP, ROI ); // --> using 7 kernels from "gtranspose" to "sum_of_3_LINES"
+		 * 		FRAG = FRAG * ROI * BIN; // using the kernel "mask_twice"
+		 * 	This means that I have to invert BIN & COMP:
+		 */
+		start_t = clock();
+		gtranspose<unsigned char><<<grid_trans,block_trans>>>( dev_TMP2, dev_COMP, MDbin.width, MDbin.heigth );
+		CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+		end_t = clock();
+		printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_trans,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+		elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
+	}
 
 	start_t = clock();
 	Vcumsum<unsigned char><<<grid_k12_t,block_k12_t>>>( dev_TMP2, MDbin.heigth,MDbin.width,dev_FRAG,RADIUS ); // { ",unsigned char>" ; "dev_TMP" }
@@ -968,13 +1064,37 @@ int main( int argc, char **argv ){
 	sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_24);
 	geotiffwrite( FIL_BIN, buffer, MDdouble, host_TMP );
 */
-	start_t = clock();
-	// still missing two parameters: one_of{dev_BIN,dev_COMP} & (RADIUS^2 *areaOfOnePixel)
-	mask_twice<<<grid_mask,block_mask>>>( 	dev_FRAG, MDbin.width, MDbin.heigth, dev_ROI, 1	);
-	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
-	end_t = clock();
-	printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_mask,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
-	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
+
+	if(rural==true){
+		/**
+		 * 	This is the schema for rural fragmentation (see NOTES in complementary_to_ONE & mask_twice kernels):
+		 * 		FRAG = fragmentation_prog( BIN, ROI ); // --> using 7 kernels from "gtranspose" to "sum_of_3_LINES"
+		 * 		FRAG = FRAG * ROI * COMP; // using the kernel "mask_twice"
+		 * 	* 	This means that the use of BIN & COMP is straightforward:
+		 */
+		start_t = clock();
+		// still missing one parameter: (RADIUS^2 *areaOfOnePixel)
+		mask_twice<<<grid_mask,block_mask>>>( 	dev_FRAG, dev_ROI, dev_COMP, MDbin.width, MDbin.heigth, 1	);
+		CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+		end_t = clock();
+		printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_mask,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+		elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
+	}
+	else { // if(rural==false){
+		/**
+		 * 	This is the schema for urban fragmentation (see NOTES in complementary_to_ONE & mask_twice kernels):
+		 * 		FRAG = fragmentation_prog( COMP, ROI ); // --> using 7 kernels from "gtranspose" to "sum_of_3_LINES"
+		 * 		FRAG = FRAG * ROI * BIN; // using the kernel "mask_twice"
+		 * 	This means that I have to invert BIN & COMP:
+		 */
+		start_t = clock();
+		// still missing one parameter: (RADIUS^2 *areaOfOnePixel)
+		mask_twice<<<grid_mask,block_mask>>>( 	dev_FRAG, dev_ROI, dev_BIN, MDbin.width, MDbin.heigth, 1	);
+		CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+		end_t = clock();
+		printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_mask,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+		elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
+	}
 
 	printf("______________________________________\n");
 	printf("  %16s\t%6d [msec]\n", "Total time (T):",elapsed_time );
@@ -987,7 +1107,7 @@ int main( int argc, char **argv ){
 	/*
 	 * 	Fragmentation [by Giorgio Urso]
 	 */
-	printf("\n\n");
+/*	printf("\n\n");
 	double *pixel_count;
 	cudaMallocHost(&pixel_count, MDbin.width*MDbin.heigth*sizeof(double));
 	//int R = 1; // raggio
@@ -1001,6 +1121,7 @@ int main( int argc, char **argv ){
 	std::cout << "\n";
 	geotiffwrite(FIL_FRAG,"/home/giuliano/git/cuda/fragmentation/data/FRAGgiorgio-cuda.tif", MDdouble, pixel_count );
 	cudaFreeHost(pixel_count);
+*/
 	/*
 	 * 	Perimeter [by Giorgio Urso]
 	 */

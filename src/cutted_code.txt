@@ -1,0 +1,171 @@
+	/*		KERNELS INVOCATION
+	 *
+	 *			*************************
+	 *			-1- cumsum_horizontal
+	 *			-2- sum_of_3_cols
+	 *			-3- cumsum_vertical
+	 *			-4- diff_of_2_rows
+	 *			*************************
+	 */
+
+	// kernel size:
+	mask_len 	= RADIUS*2+1;
+	unsigned int 	BLOCKSIZE, GRIDSIZE_X, GRIDSIZE_Y;
+	BLOCKSIZE	= floor(sqrt( devProp.maxThreadsPerBlock ));
+	GRIDSIZE_X 	= ((unsigned int)(MD.width % mask_len)>0) + (MD.width  / mask_len);
+	GRIDSIZE_Y 	= 1 + floor(MD.heigth / (BLOCKSIZE*BLOCKSIZE));
+	dim3 block( 1,BLOCKSIZE*BLOCKSIZE,1);
+	dim3 grid ( GRIDSIZE_X,GRIDSIZE_Y,1);
+
+	// ***-1-***
+	start_t = clock();
+	cumsum_horizontal<<<grid,block>>>( 	dev_BIN, dev_ROI, MD.width, MD.heigth, dev_IO, RADIUS 	);
+	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+	end_t = clock();
+	printf("  -%d- %12s\t%6d [msec]\n",++count_print,kern_1,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	if (print_intermediate_arrays){
+		CUDA_CHECK_RETURN( cudaMemcpy(host_IO,dev_IO,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
+		sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_1);
+		geotiffwrite( FIL_BIN, buffer, MDprint, host_IO );
+		//write_mat_double(host_hCSUM, MD.heigth, MD.width, buffer);
+	}
+	// elapsed time [ms]:
+	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );
+	// ***-2-***
+	start_t = clock();
+	sum_of_3_cols	 <<<grid,block>>>( 	dev_IO, MD.width, MD.heigth, dev_FRAG, RADIUS			);
+	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+	end_t = clock();
+	printf("  -%d- %12s\t%6d [msec]\n",++count_print,kern_2,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	if (print_intermediate_arrays){
+		CUDA_CHECK_RETURN( cudaMemcpy(host_FRAG,dev_FRAG,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
+		sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_2);
+		geotiffwrite( FIL_BIN, buffer, MDprint, host_FRAG );
+		//write_mat_double(host_SUM3c, MD.heigth, MD.width, buffer);
+	}
+	// elapsed time [ms]:
+	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );
+	// ***-3-***
+	GRIDSIZE_X 	= ((unsigned int)(MD.width % (BLOCKSIZE*BLOCKSIZE))>0) + (MD.width  / (BLOCKSIZE*BLOCKSIZE));
+	GRIDSIZE_Y 	= 1 + floor(MD.heigth / mask_len);
+	dim3 block3( BLOCKSIZE*BLOCKSIZE,1,1 );
+	dim3 grid3 ( GRIDSIZE_X,GRIDSIZE_Y,1 );
+	start_t = clock();
+	cumsum_vertical	 <<<grid3,block3>>>( 	dev_FRAG, MD.width, MD.heigth, dev_IO, RADIUS 		);
+	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+	end_t = clock();
+	printf("  -%d- %12s\t%6d [msec]\n",++count_print,kern_3,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	if (print_intermediate_arrays){
+		CUDA_CHECK_RETURN( cudaMemcpy(host_IO,dev_IO,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
+		sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_3);
+		geotiffwrite( FIL_BIN, buffer, MDprint, host_IO );
+		//write_mat_double(host_SUM3c, MD.heigth, MD.width, buffer);
+	}
+	// elapsed time [ms]:
+	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );
+	// ***-4-***
+	start_t = clock();
+	sum_of_3_rows	<<<grid3,block3>>>( 	dev_IO, MD.width, MD.heigth, dev_FRAG, RADIUS 		);
+	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+	end_t = clock();
+	printf("  -%d- %12s\t%6d [msec]\n",++count_print,kern_4,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	if (print_intermediate_arrays){
+		CUDA_CHECK_RETURN( cudaMemcpy(host_FRAG,dev_FRAG,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
+		sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_4);
+		geotiffwrite( FIL_BIN, buffer, MDprint, host_FRAG );
+		//write_mat_double(host_SUM3c, MD.heigth, MD.width, buffer);
+	}
+	// elapsed time [ms]:
+	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );
+
+	printf("______________________________________\n");
+	printf("  %16s\t%6d [msec]\n", "Total time:",elapsed_time );
+
+	// save on HDD
+	geotiffwrite( FIL_ROI, FIL_FRAG, MDprint, host_FRAG );
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	/*
+	 * 	VERY VERY VERY IMPORTANT --> http://brianmykietka.net/projects.php?project=finalmatrixtranspose
+	 */
+/* 	int numIterations = 1;
+   	int nTxB = floor(sqrt( devProp.maxThreadsPerBlock ));
+   	int blockRows = 8; // see http://brianmykietka.net/projects.php?project=finalmatrixtranspose
+	int gridDimX = ((unsigned int)(MD.width  % nTxB)>0) + MD.width  / nTxB;
+   	int gridDimY = ((unsigned int)(MD.heigth % nTxB)>0) + MD.heigth / nTxB;
+*/
+/* 	int threadDimX = nTxB;
+   	int threadDimY = blockRows;
+    dim3 grid_t( gridDimX, gridDimY );
+    dim3 threads_t( threadDimX, threadDimY, 1);
+	transposeFineGrained<<< grid_t, threads_t >>>( dev_ROI, dev_BIN, MD.width, MD.heigth, numIterations, blockRows );
+	CUDA_CHECK_RETURN( cudaMemcpy(ROI,dev_ROI,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
+	sprintf(buffer,"/home/giuliano/git/cuda/fragmentation/data/BIN-2-t.txt");
+*/
+	/*	MDtranspose = MD;
+	MDtranspose.heigth = MD.width;
+	MDtranspose.width = MD.heigth;
+	geotiffwrite( FIL_ROI, buffer, MDtranspose, ROI );
+	write_mat_double(ROI, MD.width, MD.heigth, buffer);
+	transposeNaive<<< grid_t, threads_t >>>( dev_ROI, dev_BIN, MD.width, MD.heigth, numIterations, blockRows );
+	CUDA_CHECK_RETURN( cudaMemcpy(ROI,dev_ROI,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
+	sprintf(buffer,"/home/giuliano/git/cuda/fragmentation/data/BIN-2-tn.txt");
+	write_mat_double(ROI, MD.width, MD.heigth, buffer);
+*/
+/*   	int threadDimX = nTxB;
+   	int threadDimY = nTxB;
+    dim3 grid_t( gridDimX, gridDimY );
+    dim3 threads_t( threadDimX, threadDimY, 1);
+	transposeSC<double,false><<<grid_t,threads_t>>>(dev_ROI, dev_BIN, MD.width, MD.heigth);
+	CUDA_CHECK_RETURN( cudaMemcpy(ROI,dev_ROI,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
+	sprintf(buffer,"/home/giuliano/git/cuda/fragmentation/data/BIN-2-tn-SC.txt");
+	write_mat_double(ROI, MD.width, MD.heigth, buffer);
+*/
+
+
+
+
+
+
+
+
+
+
+
+/*	CUDA_CHECK_RETURN( cudaMemcpy(ROI,dev_ROI,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
+	sprintf(buffer,"/home/giuliano/git/cuda/fragmentation/data/BIN-2-gt.tif");
+	MDtranspose = MD;
+	MDtranspose.heigth = MD.width;
+	MDtranspose.width = MDbin.heigth;
+	geotiffwrite( FIL_ROI, buffer, MDtranspose, ROI );
+*/
+
+
+
+
+
+
+
+
+
+
+
+

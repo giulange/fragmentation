@@ -20,7 +20,7 @@
  */
 #define 		TILE_DIM 					32
 unsigned int 	RADIUS						= 5;
-bool			rural						= true;
+bool			rural						= false;
 bool 			print_intermediate_arrays 	= false;
 const char 		*BASE_PATH 					= "/home/giuliano/git/cuda/fragmentation";
 
@@ -745,21 +745,17 @@ __global__ void mask_twice(		double 				*FRAG		,	// in/out
 	 *	else if  urban fragmentation COMP is BIN.
 	 */
 
-	__shared__ double FRAG_sh[TILE_DIM][TILE_DIM];
-
 	unsigned int tix 		= blockDim.x*blockIdx.x + threadIdx.x;
 	unsigned int tiy 		= blockDim.y*blockIdx.y + threadIdx.y;
 	unsigned int tid 		= tix + tiy*map_width;
 
 	if( tix < map_width && tiy < map_height){
-		FRAG_sh[threadIdx.y][threadIdx.x] = 0.0; __syncthreads();
+		//double FRAG_reg = 0.0;
 		//FRAG[tid] = (double)((unsigned int)FRAG[tid] * ROI[tid] * COMP[tid]) / mask_area;
-		if(ROI[tid]==1 && COMP[tid]==1){
-			FRAG_sh[threadIdx.y][threadIdx.x] = FRAG[tid];// / mask_area;
+		if(ROI[tid]!=1 || COMP[tid]!=1){
+			FRAG[tid] = 0.0;
 		}
-		__syncthreads();
-		FRAG[tid] = FRAG_sh[threadIdx.y][threadIdx.x];
-		__syncthreads();
+		//FRAG[tid] = FRAG_reg;
 	}
 }
 
@@ -979,7 +975,7 @@ int main( int argc, char **argv ){
 	complementary_to_ONE<unsigned char><<<grid_compl,block_compl>>>( dev_ONE,dev_BIN, dev_COMP, MDbin.width, MDbin.heigth );
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
-	printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_compl,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_compl,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 /*	CUDA_CHECK_RETURN( cudaMemcpy(host_COMP,dev_COMP,	(size_t)sizeChar,cudaMemcpyDeviceToHost) );
 	sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_compl);
@@ -996,7 +992,7 @@ int main( int argc, char **argv ){
 		gtranspose<unsigned char><<<grid_trans,block_trans>>>( dev_TMP2, dev_BIN, MDbin.width, MDbin.heigth );
 		CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 		end_t = clock();
-		printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_trans,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+		printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_trans,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 		elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 	}
 	else if(rural==false){
@@ -1010,7 +1006,7 @@ int main( int argc, char **argv ){
 		gtranspose<unsigned char><<<grid_trans,block_trans>>>( dev_TMP2, dev_COMP, MDbin.width, MDbin.heigth );
 		CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 		end_t = clock();
-		printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_trans,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+		printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_trans,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 		elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 	}
 
@@ -1018,7 +1014,7 @@ int main( int argc, char **argv ){
 	Vcumsum<unsigned char><<<grid_k12_t,block_k12_t>>>( dev_TMP2, MDbin.heigth,MDbin.width,dev_FRAG,RADIUS ); // { ",unsigned char>" ; "dev_TMP" }
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
-	printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_13,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_13,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 /*	gtranspose<double><<<grid_trans2,block_trans>>>(dev_IO, dev_FRAG, MDbin.heigth, MDbin.width);
 	CUDA_CHECK_RETURN( cudaMemcpy(host_TMP,dev_IO,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
@@ -1029,7 +1025,7 @@ int main( int argc, char **argv ){
 	sum_of_3_LINES<<<grid_k12_t,block_k12_t>>>( 	dev_FRAG, MDbin.heigth, MDbin.width, dev_IO, RADIUS 		);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
-	printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_24,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_24,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 /*	gtranspose<double><<<grid_trans2,block_trans>>>(dev_FRAG, dev_IO, MDbin.heigth, MDbin.width);
 	CUDA_CHECK_RETURN( cudaMemcpy(host_TMP,dev_FRAG,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
@@ -1040,7 +1036,7 @@ int main( int argc, char **argv ){
 	gtranspose<double><<<grid_trans2,block_trans>>>(dev_FRAG, dev_IO, MDbin.heigth, MDbin.width);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
-	printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_trans,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_trans,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 
 	start_t = clock();
@@ -1048,7 +1044,7 @@ int main( int argc, char **argv ){
 	Vcumsum<double><<<grid_k3,block_k3>>>( dev_FRAG, MDbin.width,MDbin.heigth,dev_IO,RADIUS ); // { ",unsigned char" ; "dev_ROI, " }
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
-	printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_13,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_13,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 /*	CUDA_CHECK_RETURN( cudaMemcpy(host_TMP,dev_IO,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
 	sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_13);
@@ -1058,7 +1054,7 @@ int main( int argc, char **argv ){
 	sum_of_3_LINES<<<grid_k3,block_k3>>>( 	dev_IO, MDbin.width, MDbin.heigth, dev_FRAG, RADIUS 		);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
-	printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_24,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_24,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 /*	CUDA_CHECK_RETURN( cudaMemcpy(host_TMP,dev_FRAG,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
 	sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_24);
@@ -1077,7 +1073,7 @@ int main( int argc, char **argv ){
 		mask_twice<<<grid_mask,block_mask>>>( 	dev_FRAG, dev_ROI, dev_COMP, MDbin.width, MDbin.heigth, 1	);
 		CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 		end_t = clock();
-		printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_mask,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+		printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_mask,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 		elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 	}
 	else { // if(rural==false){
@@ -1092,12 +1088,12 @@ int main( int argc, char **argv ){
 		mask_twice<<<grid_mask,block_mask>>>( 	dev_FRAG, dev_ROI, dev_BIN, MDbin.width, MDbin.heigth, 1	);
 		CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 		end_t = clock();
-		printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_mask,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+		printf("  -%d- %20s\t%6d [msec]\n",++count_print,kern_mask,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 		elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 	}
 
 	printf("______________________________________\n");
-	printf("  %16s\t%6d [msec]\n", "Total time (T):",elapsed_time );
+	printf("  %21s\t%6d [msec]\n", "Total time (T):",elapsed_time );
 
 	CUDA_CHECK_RETURN( cudaMemcpy(host_FRAG,dev_FRAG,	(size_t)sizeDouble,cudaMemcpyDeviceToHost) );
 	// save on HDD

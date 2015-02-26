@@ -1,6 +1,6 @@
 %% kernel fragmentation
 %% pars
-rural               = true;
+rural               = false;
 threshold           = 0.7;
 mat_builtin         = false; % { true:colfilt.m , false:4-kernels-by-giuliano }
 cuda_elapsed_time   = [910,250, 10870];% copy/paste from Nsight ==> [ 4-kernels, 3-kernels, giorgio.urso ]
@@ -72,8 +72,14 @@ BIN             = double(geotiffread(FIL_BIN));
 ROI             = double(geotiffread(FIL_ROI));
 % apply ROI by filtering BIN:
 BIN = BIN.*ROI;
+%% set rural/urban fragmentation
 % complementary_to_ONE
 COMP            = ones(size(BIN))-BIN;
+if ~rural
+    TMP = COMP;
+    COMP = BIN;
+    BIN = TMP;
+end
 %% set derived variables
 buffer          = RADIUS+1;
 mask_len        = RADIUS*2+1;
@@ -295,16 +301,16 @@ FRAG_ml = FRAG_ml .* ROI;
 myToc = round(toc*1000);
 fprintf('%25s\t%6d [msec]\n\n','"colfilt" built-in func.',myToc)
 end
-
-%% rural / urban
+%% mask_twice
 if ~mat_builtin, FRAG_ml = k4_ml; end
 
-if rural
-    % computes rural fragmentation:
-    FRAG_ml = FRAG_ml .* COMP .* ROI;
-else
-    % computes urban fragmentation:
-    FRAG_ml = FRAG_ml .* BIN .* ROI;
+% computes rural/urban fragmentation:
+FRAG_ml = FRAG_ml .* COMP .* ROI;
+
+if ~rural
+    TMP = BIN;
+    BIN = COMP;
+    COMP = TMP;
 end
 %% DIFF :: MatLab - CUDA 4 kernel
 

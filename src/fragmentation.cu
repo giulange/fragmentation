@@ -49,6 +49,7 @@ const char 		*kern_4 		= "sum_of_3_rows"		;
 const char 		*kern_13 		= "Vcumsum"				;
 const char 		*kern_24 		= "sum_of_3_LINES"		;
 const char 		*kern_trans		= "gtransform"			;
+const char 		*kern_mask		= "mask_twice"			;
 
 char			buffer[255];
 
@@ -588,9 +589,9 @@ __global__ void sum_of_3_rows( 		const double 			*vCSUM		,
 	}
 }
 
-template<typename C, typename U>
+template<typename C>//, typename U>
 __global__ void Vcumsum( 	const C				*IN			,
-							const U				*MASK		,
+//							const U				*MASK		,
 							unsigned long int 	map_width	,
 							unsigned long int 	map_height	,
 							double 				*OUT		,
@@ -603,9 +604,14 @@ __global__ void Vcumsum( 	const C				*IN			,
 	 *  Y<--mask_len.
 	 *  The first "if" avoids going beyond the last row and the second "if"
 	 *  avoids going beyond the last column.
-	 *
 	 *  block 	= [32*32,	1,			1]
 	 *  tile	= [32*32,	mask_len,	1]
+	 *
+	 *  If I avoid the MASK in this kernel I avoid the gtransform on ROI.
+	 *  If I don't mask here signifies that all pixels within IN are used to
+	 *  compute the fragmentation of all pixels; further, masking at the end
+	 *  of whole program I exclude all points outside ROI. This seems to be
+	 *  the most wonderful situation.
 	 */
 	unsigned long int ii;
 	unsigned long int mask_len 	= RADIUS*2+1;
@@ -616,14 +622,14 @@ __global__ void Vcumsum( 	const C				*IN			,
 	if( tix < map_width  ){ // && tiy < map_height
 		// Here I copy the first row of values within the tile:
 		if(tid<map_width*map_height)
-			OUT[tid] = IN[tid]*MASK[tid];
+			OUT[tid] = IN[tid];//*MASK[tid];
 		/*	Here, for every row(i.e. block) and every thread of the row(i.e. block),
 		 * 	I sum the current(tid+ii) and the previous(tid+ii-1) values and write
 		 * 	the result in the current position(tid+ii) of the output array.
 		 */
 		for(ii=1;ii<mask_len;ii++)
 			if(tiy+ii<map_height)
-				OUT[tid+ii*map_width] = OUT[tid+(ii-1)*map_width] + IN[tid+ii*map_width]*MASK[tid+ii*map_width];
+				OUT[tid+ii*map_width] = OUT[tid+(ii-1)*map_width] + IN[tid+ii*map_width];//*MASK[tid+ii*map_width];
 	}
 }
 
@@ -687,6 +693,21 @@ __global__ void sum_of_3_LINES(		const double 	*IN			,
 			if(tiy+RADIUS<map_height) OUT[tid+RADIUS*map_width] = IN[tid+latest_row*map_width];
 			for(ii=RADIUS+1;ii<mask_len;ii++) if(tiy+ii<map_height) OUT[tid+ii*map_width] = IN[tid+latest_row*map_width] - IN[tid+(ii-RADIUS-1)*map_width];
 		}
+	}
+}
+__global__ void mask_twice(		double 				*FRAG		,	// in/out
+								unsigned int 		map_width	,
+								unsigned int 		map_height	,
+								const unsigned char	*ROI		,
+//								const double		*COMP		,
+								unsigned int		mask_area	){
+
+	unsigned int tix 		= blockDim.x*blockIdx.x + threadIdx.x;
+	unsigned int tiy 		= blockDim.y*blockIdx.y + threadIdx.y;
+	unsigned int tid 		= tix + tiy*map_width;
+
+	if( tix < map_width && tiy < map_height){
+		FRAG[tid] = FRAG[tid] * ROI[tid] / mask_area; // it still misses oneOf{ BIN, COMP }
 	}
 }
 
@@ -774,7 +795,7 @@ int main( int argc, char **argv ){
 	 */
 	int sqrt_nmax_threads = floor(sqrt( devProp.maxThreadsPerBlock ));
 	// k1 + k2
-	unsigned int 	gdx_k12, gdy_k12, gdx_k3, gdy_k3, gdx_trans, gdy_trans, gdx_k12_t, gdy_k12_t;
+	unsigned int 	gdx_k12, gdy_k12, gdx_k3, gdy_k3, gdx_trans, gdy_trans, gdx_k12_t, gdy_k12_t,gdx_mask,gdy_mask;
 	gdx_k12 	= ((unsigned int)(MDbin.width % mask_len)>0) + (MDbin.width  / mask_len);
 	gdy_k12 	= (unsigned int)(MDbin.heigth % (sqrt_nmax_threads*sqrt_nmax_threads)>0) + floor(MDbin.heigth / (sqrt_nmax_threads*sqrt_nmax_threads));
 	dim3 block_k12( 1,sqrt_nmax_threads*sqrt_nmax_threads,1);
@@ -794,7 +815,11 @@ int main( int argc, char **argv ){
 	dim3 block_trans( sqrt_nmax_threads, sqrt_nmax_threads, 1);
 	dim3 grid_trans ( gdx_trans, gdy_trans );
 	dim3 grid_trans2( gdy_trans, gdx_trans );
-
+	// mask_twice
+	gdx_mask	= ((unsigned int)(MDbin.width  % sqrt_nmax_threads)>0) + MDbin.width  / sqrt_nmax_threads;
+	gdy_mask 	= ((unsigned int)(MDbin.heigth % sqrt_nmax_threads)>0) + MDbin.heigth / sqrt_nmax_threads;
+	dim3 block_mask( sqrt_nmax_threads, sqrt_nmax_threads, 1);
+	dim3 grid_mask ( gdx_mask, gdy_mask );
 
 	/*		KERNELS INVOCATION
 	 *
@@ -879,13 +904,13 @@ int main( int argc, char **argv ){
 	count_print=0;
 	elapsed_time=0;
 	printf("\n\n");
-	start_t = clock();
+/*	start_t = clock();
 	gtranspose<unsigned char><<<grid_trans,block_trans>>>(dev_TMP, dev_ROI, MDbin.width, MDbin.heigth);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
 	printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_trans,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
-
+*/
 	start_t = clock();
 	gtranspose<unsigned char><<<grid_trans,block_trans>>>(dev_TMP2,dev_BIN, MDbin.width, MDbin.heigth);
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
@@ -894,7 +919,7 @@ int main( int argc, char **argv ){
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 
 	start_t = clock();
-	Vcumsum<unsigned char,unsigned char><<<grid_k12_t,block_k12_t>>>( dev_TMP2, dev_TMP, MDbin.heigth,MDbin.width,dev_FRAG,RADIUS );
+	Vcumsum<unsigned char><<<grid_k12_t,block_k12_t>>>( dev_TMP2, MDbin.heigth,MDbin.width,dev_FRAG,RADIUS ); // { ",unsigned char>" ; "dev_TMP" }
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
 	printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_13,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
@@ -923,8 +948,8 @@ int main( int argc, char **argv ){
 	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
 
 	start_t = clock();
-	CUDA_CHECK_RETURN( cudaMemset(dev_ROI, 1,  					sizeChar) );
-	Vcumsum<double,unsigned char><<<grid_k3,block_k3>>>( dev_FRAG, dev_ROI, MDbin.width,MDbin.heigth,dev_IO,RADIUS );
+	//CUDA_CHECK_RETURN( cudaMemset(dev_ROI, 1,  					sizeChar) );
+	Vcumsum<double><<<grid_k3,block_k3>>>( dev_FRAG, MDbin.width,MDbin.heigth,dev_IO,RADIUS ); // { ",unsigned char" ; "dev_ROI, " }
 	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
 	end_t = clock();
 	printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_13,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
@@ -943,6 +968,14 @@ int main( int argc, char **argv ){
 	sprintf(buffer,"%s/data/-%d-%s.tif",BASE_PATH,count_print,kern_24);
 	geotiffwrite( FIL_BIN, buffer, MDdouble, host_TMP );
 */
+	start_t = clock();
+	// still missing two parameters: one_of{dev_BIN,dev_COMP} & (RADIUS^2 *areaOfOnePixel)
+	mask_twice<<<grid_mask,block_mask>>>( 	dev_FRAG, MDbin.width, MDbin.heigth, dev_ROI, 1	);
+	CUDA_CHECK_RETURN( cudaDeviceSynchronize() );
+	end_t = clock();
+	printf("  -%d- %15s\t%6d [msec]\n",++count_print,kern_mask,(int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 ));
+	elapsed_time += (int)( (double)(end_t  - start_t ) / (double)CLOCKS_PER_SEC * 1000 );// elapsed time [ms]:
+
 	printf("______________________________________\n");
 	printf("  %16s\t%6d [msec]\n", "Total time (T):",elapsed_time );
 

@@ -14,12 +14,11 @@
 // GIS
 #include "/home/giuliano/git/cuda/weatherprog-cudac/includes/gis.h"
 
-
 /**
  * 	PARS
  */
 #define 		TILE_DIM 					32
-unsigned int 	RADIUS						= 5;
+unsigned int 	RADIUS						= 40;
 bool			rural						= false;
 bool 			print_intermediate_arrays 	= false;
 const char 		*BASE_PATH 					= "/home/giuliano/git/cuda/fragmentation";
@@ -54,7 +53,7 @@ const char 		*kern_3 		= "cumsum_vertical"		;
 const char 		*kern_4 		= "sum_of_3_rows"		;
 const char 		*kern_13 		= "Vcumsum"				;
 const char 		*kern_24 		= "sum_of_3_LINES"		;
-const char 		*kern_trans		= "gtransform"			;
+const char 		*kern_trans		= "gtranspose"			;
 const char 		*kern_mask		= "mask_twice"			;
 const char 		*kern_compl		= "complementary_to_ONE";
 
@@ -65,12 +64,12 @@ char			buffer[255];
  */
 //const char 		*FIL_ROI 		= "/home/giuliano/git/cuda/fragmentation/data/ROI.tif";
 //const char 		*FIL_BIN 		= "/home/giuliano/git/cuda/fragmentation/data/BIN.tif";
-const char 		*FIL_ROI 		= "/home/giuliano/git/cuda/fragmentation/data/lodi1954_roi.tif";
-const char 		*FIL_BIN 		= "/home/giuliano/git/cuda/fragmentation/data/lodi1954.tif";
+//const char 		*FIL_ROI 		= "/home/giuliano/git/cuda/fragmentation/data/lodi1954_roi.tif";
+//const char 		*FIL_BIN 		= "/home/giuliano/git/cuda/fragmentation/data/lodi1954.tif";
 //const char 		*FIL_ROI        = "/media/DATI/wg-pedology/db-backup/LIFE+/50_Lodi/urban/lodi1954_roi.tif";
 //const char		*FIL_BIN        = "/media/DATI/wg-pedology/db-backup/LIFE+/50_Lodi/urban/lodi1954.tif";
-//const char 		*FIL_ROI		= "/home/giuliano/git/cuda/fragmentation/data/imp_mosaic_char_2006_cropped_roi.tif";
-//const char 		*FIL_BIN		= "/home/giuliano/git/cuda/fragmentation/data/imp_mosaic_char_2006_cropped.tif";
+const char 		*FIL_ROI		= "/home/giuliano/git/cuda/fragmentation/data/imp_mosaic_char_2006_cropped_roi.tif";
+const char 		*FIL_BIN		= "/home/giuliano/git/cuda/fragmentation/data/imp_mosaic_char_2006_cropped.tif";
 //const char		*FIL_ROI		= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/ispra/imp_mosaic_char_2006_cropped2_roi.tif";
 //const char		*FIL_BIN		= "/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/ispra/imp_mosaic_char_2006_cropped2.tif";
 

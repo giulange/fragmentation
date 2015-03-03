@@ -3,8 +3,8 @@
 rural               = false;
 threshold           = 0.7;
 mat_builtin         = false; % { true:colfilt.m , false:4-kernels-by-giuliano }
-cuda_elapsed_time   = [910,250, 10870];% copy/paste from Nsight ==> [ 4-kernels, 3-kernels, giorgio.urso ]
-RADIUS              = 5;
+cuda_elapsed_time   = [3210,780, 10870];% copy/paste from Nsight ==> [ 4-kernels, 3-kernels, giorgio.urso ]
+RADIUS              = 40;
 PATH                = '/home/giuliano/git/cuda/fragmentation';
 % PATH              = '/Users/giuliano/Documents/MATLAB';
 k_name{1}           = '-1-cumsum_horizontal.tif'    ;
@@ -14,12 +14,12 @@ k_name{4}           = '-4-sum_of_3_rows.tif'        ;
 %% ---input
 % FIL_ROI           = fullfile(PATH,'data','ROI.tif');
 % FIL_BIN           = fullfile(PATH,'data','BIN.tif');
-FIL_ROI             = fullfile(PATH,'data','lodi1954_roi.tif');
-FIL_BIN             = fullfile(PATH,'data','lodi1954.tif');
+% FIL_ROI             = fullfile(PATH,'data','lodi1954_roi.tif');
+% FIL_BIN             = fullfile(PATH,'data','lodi1954.tif');
 % FIL_ROI           = '/media/DATI/wg-pedology/db-backup/LIFE+/50_Lodi/urban/lodi1954_roi.tif';
 % FIL_BIN           = '/media/DATI/wg-pedology/db-backup/LIFE+/50_Lodi/urban/lodi1954.tif';
-% FIL_ROI             = fullfile(PATH,'data','imp_mosaic_char_2006_cropped_roi.tif');
-% FIL_BIN             = fullfile(PATH,'data','imp_mosaic_char_2006_cropped.tif');
+FIL_ROI             = fullfile(PATH,'data','imp_mosaic_char_2006_cropped_roi.tif');
+FIL_BIN             = fullfile(PATH,'data','imp_mosaic_char_2006_cropped.tif');
 % FIL_ROI             = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/ispra/imp_mosaic_char_2006_cropped2_roi.tif';
 % FIL_BIN             = '/home/giuliano/work/Projects/LIFE_Project/LUC_gpgpu/ispra/imp_mosaic_char_2006_cropped2.tif';
 % cuda intermediate files
@@ -386,12 +386,12 @@ fprintf('Number of pixels with wrong fragmentation:  %8d\n\n',sum(DIFF(:)~=0) )
 
 %% DIFF :: CUDA 3 kernel - CUDA Giorgio.Urso
 
-fprintf( '%25s\t%7.2f\n','[cu-giorgio / cu_t] speed-up',cuda_elapsed_time(3)/cuda_elapsed_time(2) )
-fprintf( '%25s\t%7.2f\n','[ml / cu-giorgio] speed-up', sum(myToc)/cuda_elapsed_time(3) )
-
-FRAG_giorgio    = geotiffread( FIL_FRAG_giorgio );
-DIFF            = FRAG_giorgio - FRAG_cudat;
-fprintf('Number of pixels with wrong fragmentation:  %8d\n\n',sum(DIFF(:)~=0) )
+% fprintf( '%25s\t%7.2f\n','[cu-giorgio / cu_t] speed-up',cuda_elapsed_time(3)/cuda_elapsed_time(2) )
+% fprintf( '%25s\t%7.2f\n','[ml / cu-giorgio] speed-up', sum(myToc)/cuda_elapsed_time(3) )
+% 
+% FRAG_giorgio    = geotiffread( FIL_FRAG_giorgio );
+% DIFF            = FRAG_giorgio - FRAG_cudat;
+% fprintf('Number of pixels with wrong fragmentation:  %8d\n\n',sum(DIFF(:)~=0) )
 
 %% explicit possible differences
 
